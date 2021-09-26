@@ -341,7 +341,12 @@ class LocalstackPlugin {
   }
 
   shouldRunDockerSudo() {
-    return (this.config.docker || {}).sudo;
+    return (this.config.docker || {}).sudo || false;
+  }
+
+  getDockerCmd() {
+    this.log('Trace: getting docker command');
+    return this.shouldRunDockerSudo() ? 'sudo docker' : 'docker';
   }
 
   getStageVariable() {
@@ -388,7 +393,7 @@ class LocalstackPlugin {
     }
 
     const getContainer = () => {
-      return exec('docker ps').then(
+      return exec(`${this.getDockerCmd()} ps`).then(
         (stdout) => {
           const exists = stdout.split('\n').filter((line) => line.indexOf('localstack/localstack') >= 0 || line.indexOf('localstack_localstack') >= 0);
           if (exists.length) {
@@ -408,7 +413,7 @@ class LocalstackPlugin {
       }
       return this.sleep(4000).then(() => {
         this.log(`Checking state of LocalStack container ${containerID}`)
-        return exec(`docker logs "${containerID}"`).then(
+        return exec(`${this.getDockerCmd()} logs "${containerID}"`).then(
           (logs) => {
             const ready = logs.split('\n').filter((line) => line.indexOf('Ready.') >= 0);
             if (ready.length) {
@@ -420,6 +425,15 @@ class LocalstackPlugin {
       });
     }
 
+    const addNetworks = async (containerID) => {
+      if(this.config.networks) {
+        for(var network in this.config.networks) {
+          await exec(`${this.getDockerCmd()} network connect "${this.config.networks[network]}" ${containerID}`);
+        }
+      }
+      return containerID;
+    }
+    
     return getContainer().then(
       (containerID) => {
         if(containerID) {
@@ -434,13 +448,11 @@ class LocalstackPlugin {
         env.DOCKER_FLAGS = (env.DOCKER_FLAGS || '') + ` -d -v ${cwd}:${cwd}`;
         env.START_WEB = env.START_WEB || '0';
         const maxBuffer = (+env.EXEC_MAXBUFFER)||50*1000*1000; // 50mb buffer to handle output
-        if (this.shouldRunDockerSudo()) {
-          env.DOCKER_CMD = 'sudo docker';
-        }
+        env.DOCKER_CMD = this.getDockerCmd();
         const options = {env: env, maxBuffer};
         return exec('localstack start', options).then(getContainer)
-          .then((containerID) => checkStatus(containerID)
-        );
+          .then((containerID) => addNetworks(containerID))
+          .then((containerID) => checkStatus(containerID));
       }
     );
   }
